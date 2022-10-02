@@ -1,0 +1,422 @@
+This document does several things:
+- Uses the instructions from Kali Linux ARM Raspberry Pi Full Disk Encryption, located here
+  https://www.kali.org/docs/arm/raspberry-pi-full-encryption/, to create instructions for full disk encryption of a
+  Rapsberry Pi OS
+- Details some minimal initial security setup for a Raspberry Pi
+- Details setting up some software development tools on a fresh Raspberry Pi OS installation
+-- Details installing and configuring AwesomeWM
+
+# # # # # # # # # # # # #
+#  Full Disk Encryption #
+# # # # # # # # # # # # #
+
+### Credit goes to Kali Linux ARM instructions, this document copies that document and makes some changes for encrypting
+Raspberry Pi OS
+
+The Kali Linux ARM Raspberry Pi Full Disk Encryption instructions that these instructions copy are located here:
+https://www.kali.org/docs/arm/raspberry-pi-full-encryption/
+
+There are 3 main differences between this document and that document...
+
+### 2 Key differences between the Kali Linux ARM document vs. this document for Raspberry Pi OS
+1. We will use UUIDs for the USB/SD Card partitions instead of listing out the full path to the device partition(s).
+For exmaple, the Kali document often uses /dev/mmcblk0p1 and /dev/mmcblk0p2 for SD Cards, or /dev/sdb1 and /dev/sdb2 for
+USB sticks. Instead, this document uses the form UUID=some-123-uuid-456
+
+2. No remote unlock via Dropbear SSH b/c I did not want to allow SSH in to my Pi
+
+#### Instructions for encryption
+
+##### Get the latest Raspberry Pi OS onto a USB
+- Create a bootable Raspberry Pi OS SD card (download an image, use something like Etcher to put the image onto an SD
+card).
+
+- Put the Raspberry Pi OS SD card into a Raspberry Pi, boot it up
+
+- Go through the basic set up (set password, locale, connect to internet, etc.)
+
+- Update to the lastest Raspberry Pi OS, which you need to do in order to be able to boot from USB. Obviously you need
+to be on the internet in order to run the following commands to work:
+
+$ sudo apt update
+You will be asked to reboot, go ahead and reboot
+$ sudo apt full-upgrade # this should have been taken care of already by the sudo apt update, but just to be sure
+$ sudo apt autoremove
+
+##### If doing this on a Mac, set up a Linux VM
+Because this document copies the Kali Linux ARM document and the Kali document uses Kali to encrypt a Kali Linux ARM for
+the Raspberry Pi, I decided to also us Kali so that these instructions would be as similar to those instructions as
+possible. Any Linux VM should work just fine provided you install any needed pacakges that are used below.
+
+- Create a Kali Linux VM, make sure you give it adequate resources- you can always remove it once you're done with this. I
+don't have specs on what's required so I just made mine pretty big
+
+- Set up VirtualBox to read storage devices (sd card, USB stick) from host, that can be done by doing the following:
+
+If using an SD card: You need to install something called the "VirtualBox extension package" or something along those lines,
+I forget the exact name. Next, you must configure your VM to read USB devices from your host. VB does this by using "filters",
+where a filter is essentially a way for your VM to filter out which USB/SD device it wants to capture and which it wants to
+allow you host to use. There's an option when doing this to use empty strings for the filter, you can use this if you're 
+having trouble detecting the USB device in your VM. Generally, you also have to give VirtualBox some priveleges. If your host
+is a Mac, look in System Preferences > Security & Privacy and see if you see any messages about allowing Oracle access.
+
+If using a USB stick: this is not hard but I did not find instructions for it. Basically, put the USB into your computer,
+find your VM in VirtualBox, click "USB", in the bottom of the popup click the USB picture with a green plus sign, and
+select your inserted USB, click ok
+
+- Start your Kali VM
+
+- Plug your pre-setup Raspberry Pi USB or SD card into your computer
+
+- This document assumes your Storage Device is /dev/sdb in your VM. Verify this by typing the following in your terminal
+on your VM:
+$ sudo lsblk
+
+/dev/sda is PROBABLY your hard drive, /dev/sdb is PROBABLY your USB or SD card. You can unmount and take out your USB/SD
+card and run $ lsbllk again to confirm, but obvisouly put it back in again if you do in order to continue.
+
+Again, to be clear, the following document assumes that regardless of whether you use a USB or SD card, the Kali VM will
+mount it as /dev/sdb. If your VM mounts it elsewhere (like sdc) just keep that in mind in the following instructions and
+adjust accordingly. Similarly, if you're not using a VM and you are using an SD Card, it MAY be mounted like mmcblk0p
+(mmcblk0p1 being the boot partition and mmcblk0p2 being the rootfs) on your machine- just adjust.
+
+Be careful! Be sure you're targeting the right drive! You may have more devices attached to your VM and/or computer or
+have other reasons for your Raspberry Pi Os USB/SD card to not be located at /dev/sdb!
+
+##### Prepare for chroot
+- Open a terminal
+
+- $ sudo su
+
+# Tmux is important b/c in VirtualBox several times errors happened when the VM went to sleep
+# which causes you having to redo everything, sometimes even creating a new VM as the VM gets
+# corrupted it seems
+- Install tmux via $ apt install tmux
+- Create a new $ tmux session via tmux new -s 1
+
+- $ mkdir -p /mnt/chroot/boot
+
+- $ mount /dev/sdb2 /mnt/chroot/
+
+- $ mount /dev/sdb1 /mnt/chroot/boot/
+
+- $ mount -t proc none /mnt/chroot/proc
+
+- $ mount -t sysfs none /mnt/chroot/sys
+
+- $ mount -o bind /dev /mnt/chroot/dev
+
+- $ mount -o bind /dev/pts /mnt/chroot/dev/pts
+
+- $ apt update
+
+- $ apt install -y qemu-user-static
+
+- $ cp /usr/bin/qemu-arm-static /mnt/chroot/usr/bin/
+
+##### chroot, update & create some files
+- $ SHELL=/usr/bin/sh LANG=C chroot /mnt/chroot/
+
+- $ sudo apt update
+
+- $ sudo apt install -y cryptsetup lvm2 busybox
+
+- We will now be listing out kernel versions and depending on the Rassberry Pi being used you will need to choose certain
+versions.
+
+$ ls -l /lib/modules/ | awk -F" " '{print $9}'
+
+That command should return something like:
+5.15.61-v8+
+
+You should copy & paste your kernel version somewhere as you will need it later. 
+
+Also note that multiple versions may be shown. They can be for 32 bit systems and other Raspberry Pi models. You'd have to search the internet
+for the one that matches your Pi and 32 or 64 bit OS that you want.
+
+- $ echo initramfs initramfs.gz followkernel >> /boot/config.txt
+
+- Make a note of the UUID's for your USB/SD Card, you will need them later:
+$ blkid
+
+Should return something like this:
+/dev/sda1: UUID="some_uuid_for_sda1" TYPE="ext4" PARTUUID="some_part_uuid_for_sda1"
+/dev/sda5: UUID="some_uuid_for_sda5" TYPE="swap" PARTUUID="some_part_uuid_for_sda5"
+/dev/sdb1: LABEL_FATBOOT="boot" LABEL="boot" UUID="A111-1111" TYPE="vfat" PARTUUID="A1B2C3D4-01"
+/dev/sdb2: LABEL="rootfs" UUID="asd23211-12as-ny12-123f-asd113sad345" TYPE="ext4" PARTUUID="A1B2C3D4-02"
+
+- Next we are going to edit /boot/cmdline.txt and change the root path. We will want to change the root path to be
+/dev/mapper/crypt, and then we will add in cryptdevice=/dev/sdb2:crypt right after that, EXCEPT WE WANT TO USE THE UUID
+from the previous step, so it will be cryptdevice=UUID=some_uuid:crypt instead of cryptdevice=/dev/sdb2:crypt. Notice that
+the UUID is not surrounded by quotation marks. Also notice :crypt is appended to the UUID.
+
+$ nano /boot/cmdline.txt # edit the file per comments above ^^
+
+The end result should look like this:
+
+$ cat /boot/cmdline.txt
+dwc_otg.fiq_fix_enable=2 console=ttyAMA0,115200 kgdboc=ttyAMA0,115200 console=tty1 root=/dev/mapper/crypt cryptdevice=UUID=asd23211-12as-ny12-123f-asd113sad345:crypt rootfstype=ext4 rootwait rootflags=noload net.ifnames=0
+
+- Now we update fstab to have the correct root filesystem path. You have to change /dev/sdb1
+(PARTUUID=some_part_uuid-01 in the example below) to use the correct UUID and change /dev/sdb2
+(PARTUUID=some_part_uuid-02 in the example below) to use /dev/mapper/crypt. I just commented out the original lines
+instead of deleting them so it's easy to see what was there originally.
+
+$ nano /etc/fstab # edit file per comment above ^
+
+$ cat /etc/fstab
+proc            /proc           proc    defaults          0       0
+UUID=A111-1111  /boot           vfat    defaults          0       2
+#PARTUUID=some_part_uuid-01  /boot           vfat    defaults          0       2
+/dev/mapper/crypt  /               ext4    defaults,noatime  0       1
+#PARTUUID=some_part_uuid-02  /               ext4    defaults,noatime  0       1
+
+- Next we will create the crypttab file
+If we were using a USB/SD Card device location and NOT a UUID we'd:
+echo 'crypt\t/dev/sdb2\tnone\tluks' > /etc/crypttab
+
+BUT, WE'RE USING UUIDs SO INSTEAD OF RUNNING THAT COMMAND, WE WILL DO THE FOLLOWING TO USE THE CORRECT UUID FOR /dev/sdb2
+LIKE THIS:
+echo 'crypt\tUUID=YOUR_SDB2-UUID-GOES-HERE\tnone\tluks' > /etc/crypttab
+
+You can open /etc/crypttab to make sure it looks right
+
+##### Start adding a LUKS filesystem
+- Now we do a little filesystem trickery. We create a fake LUKS filesystem which forces cryptsetup to be included.
+$ dd if=/dev/zero of=/tmp/fakeroot.img bs=4M count=20
+- Only enter `exit` ONE time (to exit chroot), if you enter `exit` twice you'll exit su and cryptsetup will fail
+$ exit
+# The following step takes a few minutes, be patient
+$ cryptsetup luksFormat /mnt/chroot/tmp/fakeroot.img
+$ cryptsetup luksOpen /mnt/chroot/tmp/fakeroot.img crypt
+$ mkfs.ext4 /mnt/chroot/dev/mapper/crypt
+$ LANG=C chroot /mnt/chroot/
+# If the above fails, try again with SHELL=/usr/bin/sh LANG=C chroot /mnt/chroot/
+
+- Let’s now enable cryptsetup.
+$ echo CRYPTSETUP=y > /etc/cryptsetup-initramfs/conf-hook
+You can verify that worked by checking the contents of /etc/cryptsetup-initramfs/conf-hook:
+$ cat /etc/cryptsetup-initramfs/conf-hook
+should return this:
+CRYPTSETUP=y
+
+- Now we need to create the initramfs. This is where the kernel versions from before come into play. This command may
+take a couple minutes, be patient.
+You probably didn't copy the kernel version to a text file like I suggested, oh well, scroll back up in this document for the command (ls -l /lib/modules/ | awk -F" " '{print $9}') and details about which one to pick.
+
+$ mkinitramfs -o /boot/initramfs.gz 4.19.118-v7l+
+
+- Now we want to ensure that we created the initramfs corectly. If there is no result, then something went wrong.
+$ lsinitramfs /boot/initramfs.gz | grep cryptsetup
+
+- Now we can ensure that all the changes are written, then we can encrypt the disk.
+$ sync && sync
+$ exit
+$ umount /mnt/chroot/boot
+$ umount /mnt/chroot/sys
+$ umount /mnt/chroot/proc
+$ umount /mnt/chroot/dev/pts
+$ umount /mnt/chroot/dev
+$ mkdir -p /mnt/{backup,encrypted}
+$ rsync -avh /mnt/chroot/* /mnt/backup/
+$ cryptsetup luksClose crypt
+$ umount /mnt/chroot
+$ fdisk /dev/sdb
+$ d
+$ 2
+$ w
+$ partprobe
+$ sleep 5
+
+- Now we need to figure out where our first partition ends so we know where to start our second partition. Can read this
+https://askubuntu.com/questions/437272/how-to-fix-overlapped-partitions-in-the-mbr-table and/or just follow these
+commands. The next command prints out start/end of partitions.
+
+$ fdisk -l -u /dev/sdb
+
+Device     Boot  Start      End  Sectors  Size Id Type
+/dev/sdb1         6002   440318   524288  256M  c W95 FAT32 (LBA)
+
+Now, in the next step just choose some place to start AFTER where /dev/sdb1 ends. I have read some people's advice to
+leave a little extra room between partitions, and I have read other people's advice that you should not. As I don't know
+what's best to do, I won't advise. If you do know, I'd appreciate a comment on this document. In any event, for the sake
+of this example, you would enter 440319 or greater for the starting position of /dev/sdb2 when asked below
+$ fdisk /dev/sdb
+$ n
+$ p
+$ 2
+$ number you obtained before, in the exmaple I gave above a number > 440318
+$ press enter to take default, otherwise enter a last sector
+$ n
+$ w
+$ partprobe
+$ sync && sync
+# Note, in the next step choose a secure passphrase
+$ cryptsetup -v -y --cipher aes-cbc-essiv:sha256 --key-size 256 luksFormat /dev/sdb2
+$ cryptsetup -v luksOpen /dev/sdb2 crypt
+$ mkfs.ext4 /dev/mapper/crypt
+$ mount /dev/mapper/crypt /mnt/encrypted/
+# Note, the following can take a long time (~30 minutes), be patient
+$ rsync -avh /mnt/backup/* /mnt/encrypted/
+# Note, the following may take a minute or two, be patient
+$ sync
+
+##### Remaking the initramfs
+- Prepare to remake the initramfs file
+$ mount /dev/sdb1 /mnt/encrypted/boot/
+$ mount -t proc none /mnt/encrypted/proc
+$ mount -t sysfs none /mnt/encrypted/sys
+$ mount -o bind /dev /mnt/encrypted/dev
+$ mount -o bind /dev/pts /mnt/encrypted/dev/pts
+$ SHELL=/usr/bin/sh LANG=C chroot /mnt/encrypted
+
+- Now we need to verify that /etc/fstab, /boot/cmdline.txt, and /etc/crypttab have the correct UUIDs, they may (probably)
+have changed since you edited these files before.
+
+Get the UUID's:
+$ blkid
+
+Compare those UUID's to those in /etc/fstab, /boot/cmdline.txt, and /etc/crypttab, correcting if necesarry. By
+"correcting", the sdb1, sbd2 and /dev/mapper/crypt entries for each should match the UUIDs you
+got from running blkid
+
+/etc/fstab: Change /dev/mapper/crypt to the UUID of /dev/mapper/crypt you got from running $ blkid.
+  - So, /dev/mapper/crypt becomes UUID=THE_UUID_ID_YOU_GOT_FROM_BLKID
+
+/boot/cmdline.txt: Update `root` and the `cryptdevice` to match what the /dev/mapper/crypt and sdb2 UUIDs
+(respectively) you got from running $ blkid . NOTE, the UUID of /dev/sdb2 should have :crypt appended to it
+like it was when you opened this file.
+
+/etc/crypttab: Update the UUID to match the sdb2 you got from running $ blkid
+
+- Remake the initramfs file, this step is important as it will not properly boot if not done, be sure to use the correct
+kernel version that you got before, as noted before as an example, 5.15.61-v8+
+
+$ mkinitramfs -o /boot/initramfs.gz 5.15.61-v8+
+
+# If you see errors, they MIGHT need to be resolved before moving on. The one about the missing sbin/fsck.luks can be
+ignored. Generally errors may arise from having the wrong UUIDs in any of /etc/fstab, /boot/cmdline.txt or
+/etc/crypttab files. If you have errors related to UUIDs, delete /boot/initramfs.gz, fix the UUIDs and re-run the
+mkinitramfs command.
+
+##### Unmount and close up
+- Now we can unmount and close up everything.
+$ exit
+$ umount /mnt/encrypted/boot
+$ umount /mnt/encrypted/sys
+$ umount /mnt/encrypted/proc
+$ umount /mnt/encrypted/dev/pts
+$ umount /mnt/encrypted/dev
+$ umount /mnt/encrypted
+$ cryptsetup luksClose /dev/mapper/crypt
+
+##### First boot
+- You will now likely be greeted with a rainbow colored screen that turns black, then nothing. This is because the
+LUKs passphrase prompt doesn't appear with the latest Rapsberry Pi OS for some reason. So, once the screen goes
+black, go ahead and type your passphrase then wait a minute or so for the Pi to log you in.
+
+Your Pi will boot and you can now enjoy it, congratulations!
+
+* Note, I have seen somewhere that the first boot occasionally fails- I haven't seen that. If you do, perhaps just try
+rebooting a second time.
+
+# # # # # # # # #
+# Initial Setup #
+# # # # # # # # #
+
+- Follow the steps here: https://www.raspberrypi.org/documentation/configuration/security.md which means at a minimum:
+  Change user pi's password
+  Change root's password
+  Make all sudoers require passwords
+- $ sudo raspi-config and check your locale, make sure you've set it to the correct country (where you physically are)
+- Use a pre-encrypted passphrase for you wifi, see here
+https://www.raspberrypi.org/documentation/configuration/wireless/wireless-cli.md. Essentially you run the wpa_passphrase
+and update /etc/wpa_supplicant/wpa_supplicant.conf to have the pre-encrypted passphrase for your network instead of the
+plain text version
+- Turn off the auto-login of user pi. This can be done in the GUI by navigating to the Raspberry Pi settings
+
+# # # # # # # # # # # # # #
+# Development Environment #
+# # # # # # # # # # # # # #
+
+Install VIM
+$ sudo apt install vim
+Logout of your computer and log back in, open a terminal. VIM should ask you if you'd like to do some setup- agree to that
+and just take the defaults
+
+Install tmux
+$ sudo apt install tmux
+
+Install ZSH
+https://github.com/ohmyzsh/ohmyzsh/wiki/Installing-ZSH
+
+Install OhMyZsh
+https://github.com/ohmyzsh/ohmyzsh#basic-installation
+
+Make tmux display 256 if your editor looks different in/out of a tmux session
+$ vi ~/.tmux.conf
+  set -g default-terminal "screen-256color"
+
+Install The Silver Searcher
+https://github.com/ggreer/the_silver_searcher
+
+Install AwesomeWM, i3, or XMondad
+$ sudo apt install awesome
+
+Change your greeter so you can select AwesomeWM
+$ ls /etc/lightdm # list greeters
+$ sudo vi /etc/lightdm/lightdm.conf
+  greeter-session=lightdm-gtk-greeter
+
+Choose a cool greeter background
+$ sudo cp ~/Desktop/1.jpeg /usr/share/pixmaps/.
+$ sudo vi /etc/lightdm/lightdm-gtk-greeter.conf
+  background=/usr/share/pixmaps/1.jpeg
+
+You can display other info if you're interested:
+$ cat /etc/x11/default-display-manager # list your display managers
+$ ls /usr/share/xsesions/*.desktop # list your desktop environments
+
+Alias xdg-open
+$ vi ~/.zshrc
+    # avoid warnings by redirecting
+    alias open="xdg-open &>/dev/null"
+
+# # # # # # # # # # # #
+# Configure AwesomeWM #
+# # # # # # # # # # # #
+
+# Create an AwesomeWM config file
+- Copy the rc.lua file (usually located /etc/xdg/awesome/rc.lua) to ~/.config/awesome.rc.lua so you can configure
+AwesomeWM. You may need to search for the file if it's not in /etc/xdg/awesome/ but if you have installed AwesomeWM it is
+somewhere on your system.
+
+# Transparency for terminal (will need to restart before taking effect):
+- Change terminal emulator
+$ sudo apt install xfce4-terminal
+$ sudo update-alternatives --config x-terminal-emulator
+$ sudo apt purge lxterminal # get rid of the terminal that came with Raspberry Pi
+- Install a different compositor b/c the default one does not seem to handle transparency
+$ sudo apt install compton
+- Auto start compton
+$ vi ~/.congif/awesome.rc.lua
+  awful.spawn.with_shell("compton") # you can just paste this at the bottom of the file
+Change preferences in xfce4 terminal to use transparent background
+
+# Change AwesomeWM background
+- https://wiki.archlinux.org/index.php/Awesome#Themes
+- change /usr/share/awesome/themes/default/background.png to whatever image you want
+
+# Replace the default Awesome prompt runner with dmenu
+$ sudo apt install dmenu
+$ edit ~/.config/awesome/rc.lua
+  
+  Replace these lines:
+    awful.key({ modkey },            "r",     function () awful.screen.focused().mypromptbox:run() end,
+              {description = "run prompt", group = "launcher"}),
+  
+  With these lines:
+    awful.key({ modkey },            "r",     function () awful.util.spawn("dmenu_run") end,
+              {description = "run dmenu", group = "launcher"}),
+
+- Restart AwesomeWM
